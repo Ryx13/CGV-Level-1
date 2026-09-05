@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DEADWAY CITY — Vertical Slice Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;600;700&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --blood:#c81e1e;
+    --amber:#e0a83c;
+    --panel:rgba(10,10,8,0.72);
+    --line:rgba(255,255,255,0.12);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;
+    font-family:'Rajdhani',sans-serif; color:#e8e4da; user-select:none;}
+  #game-canvas{position:fixed;inset:0;display:block;width:100%;height:100%;outline:none;}
+
+  /* ---------- START SCREEN ---------- */
+  #start-screen{
+    position:fixed;inset:0;z-index:50;
+    background:#050505;
+    display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+    background-size:cover;background-position:center;
+    transition:opacity .6s ease;
+  }
+  #start-screen::before{
+    content:"";position:absolute;inset:0;
+    background:linear-gradient(180deg, rgba(5,5,5,.15) 0%, rgba(5,5,5,.55) 55%, rgba(5,5,5,.96) 100%);
+  }
+  #start-inner{position:relative;z-index:2;width:100%;max-width:820px;padding:0 28px 48px;text-align:center;}
+  #title{
+    font-family:'Oswald',sans-serif;font-weight:700;letter-spacing:10px;
+    font-size:clamp(38px,7vw,72px); color:#f2ede2; margin:0;
+    text-shadow:0 0 30px rgba(200,30,30,.55), 0 4px 0 #000;
+  }
+  #title span{color:var(--blood);}
+  #subtitle{letter-spacing:4px;color:#b7b0a2;font-size:14px;margin-top:6px;text-transform:uppercase;}
+  #build-tag{margin-top:10px;font-size:13px;font-weight:700;color:#0f0;background:rgba(0,0,0,.6);
+    border:1px solid #0f0;padding:4px 10px;display:inline-block;letter-spacing:1px;}
+  #enter-btn{
+    margin-top:26px;padding:14px 40px;font-family:'Oswald',sans-serif;font-weight:600;
+    letter-spacing:3px;font-size:17px;background:var(--blood);color:#fff;border:1px solid #ff6b6b;
+    cursor:pointer;text-transform:uppercase;box-shadow:0 0 24px rgba(200,30,30,.5);
+    transition:transform .15s, background .15s;
+  }
+  #enter-btn:hover{background:#e83030;transform:translateY(-2px);}
+  #controls-grid{
+    margin-top:30px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px 20px;
+    text-align:left;font-size:13px;color:#c8c2b4;border-top:1px solid var(--line);padding-top:18px;
+  }
+  #controls-grid b{color:var(--amber);font-family:'Oswald',sans-serif;letter-spacing:1px;}
+  #note{margin-top:16px;font-size:11.5px;color:#8a8477;letter-spacing:1px;}
+
+  /* ---------- HUD ---------- */
+  #hud{position:fixed;inset:0;z-index:20;pointer-events:none;font-family:'Rajdhani',sans-serif;}
+  .hidden{display:none !important;}
+
+  #crosshair{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:22px;height:22px;}
+  #crosshair::before,#crosshair::after{content:"";position:absolute;background:rgba(240,235,225,.85);}
+  #crosshair::before{left:50%;top:0;width:2px;height:100%;transform:translateX(-1px);}
+  #crosshair::after{top:50%;left:0;height:2px;width:100%;transform:translateY(-1px);}
+  #crosshair.hit::before,#crosshair.hit::after{background:#ff3b3b;}
+  #hitmarker{position:absolute;top:50%;left:50%;width:26px;height:26px;transform:translate(-50%,-50%);
+    opacity:0;pointer-events:none;}
+  #hitmarker.show{animation:hitflash .25s ease;}
+  @keyframes hitflash{0%{opacity:1;}100%{opacity:0;}}
+  #hitmarker::before,#hitmarker::after{content:"";position:absolute;background:#ff3b3b;width:3px;height:12px;}
+  #hitmarker::before{left:2px;top:2px;transform:rotate(45deg);}
+  #hitmarker::after{right:2px;top:2px;transform:rotate(-45deg);}
+
+  #bottom-left{position:absolute;left:22px;bottom:22px;width:260px;}
+  .bar-label{font-family:'Oswald',sans-serif;font-size:11px;letter-spacing:2px;color:#b7b0a2;margin-bottom:3px;}
+  .bar-bg{width:100%;height:16px;background:rgba(0,0,0,.55);border:1px solid var(--line);position:relative;}
+  .bar-fill{height:100%;transition:width .15s;}
+  #health-fill{background:linear-gradient(90deg,#7a1010,#d02020);}
+  #stamina-fill{background:linear-gradient(90deg,#8a6a10,#e0b030);}
+  .bar-wrap{margin-bottom:10px;}
+
+  #bottom-right{position:absolute;right:22px;bottom:22px;text-align:right;}
+  #ammo{font-family:'Oswald',sans-serif;font-size:40px;font-weight:700;color:#f2ede2;line-height:1;}
+  #ammo small{font-size:18px;color:#8a8477;font-weight:400;}
+  #weapon-name{font-size:12px;letter-spacing:2px;color:var(--amber);text-transform:uppercase;}
+  #reload-text{font-size:12px;letter-spacing:2px;color:#ff5050;text-transform:uppercase;margin-top:4px;
+    animation:pulse 0.6s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+
+  #top-bar{position:absolute;top:0;left:0;right:0;padding:16px 22px;display:flex;justify-content:space-between;
+    align-items:flex-start;}
+  #objective{background:var(--panel);border:1px solid var(--line);padding:8px 14px;font-size:13px;
+    letter-spacing:1px;max-width:340px;}
+  #objective b{color:var(--amber);font-family:'Oswald',sans-serif;}
+  #killcount{font-family:'Oswald',sans-serif;font-size:13px;color:#e8e4da;margin-top:4px;letter-spacing:1px;}
+
+  #radar-wrap{width:150px;height:150px;background:rgba(0,0,0,.5);border:1px solid var(--line);border-radius:50%;
+    position:relative;overflow:hidden;}
+  #radar{width:100%;height:100%;}
+
+  #objective-compass{position:absolute;left:50%;top:78px;transform:translateX(-50%);
+    display:flex;flex-direction:column;align-items:center;pointer-events:none;}
+  #compass-arrow{font-size:30px;line-height:1;color:var(--amber);
+    text-shadow:0 0 10px rgba(224,176,48,.9),0 0 3px #000;
+    transition:transform .12s linear;}
+  #compass-label{font-family:'Oswald',sans-serif;font-size:12px;letter-spacing:2px;color:#f2ede2;
+    background:rgba(0,0,0,.55);padding:2px 10px;margin-top:2px;border:1px solid var(--line);white-space:nowrap;}
+
+  #debug-readout{position:absolute;left:12px;bottom:12px;font-family:monospace;font-size:11px;
+    color:#7dff9a;background:rgba(0,0,0,.6);padding:4px 8px;white-space:pre;line-height:1.4;
+    pointer-events:none;z-index:30;}
+
+  #prompt{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);
+    background:var(--panel);border:1px solid var(--line);padding:10px 18px;font-size:14px;letter-spacing:1px;
+    white-space:nowrap;}
+  #prompt b{color:var(--amber);border:1px solid var(--amber);padding:1px 7px;margin-right:6px;border-radius:3px;}
+
+  #speedo{position:absolute;right:22px;bottom:120px;text-align:right;}
+  #speedo #kph{font-family:'Oswald',sans-serif;font-size:34px;font-weight:700;color:#f2ede2;}
+  #speedo small{font-size:12px;color:#8a8477;}
+
+  #killfeed{position:absolute;right:22px;top:120px;text-align:right;display:flex;flex-direction:column;gap:4px;}
+  .kf-item{font-size:12px;color:#ff8a8a;background:rgba(0,0,0,.4);padding:3px 8px;opacity:0;
+    animation:kf 3s ease forwards;}
+  @keyframes kf{0%{opacity:0;transform:translateX(10px);}10%{opacity:1;transform:translateX(0);}
+    80%{opacity:1;}100%{opacity:0;}}
+
+  #screen-flash{position:fixed;inset:0;pointer-events:none;background:rgba(200,0,0,0);z-index:25;}
+  #vignette{position:fixed;inset:0;z-index:18;pointer-events:none;
+    background:radial-gradient(ellipse at center, transparent 42%, rgba(0,0,0,.62) 100%);}
+  #blood-vignette{position:fixed;inset:0;z-index:19;pointer-events:none;opacity:0;transition:opacity .25s;
+    background:radial-gradient(ellipse at center, transparent 48%, rgba(110,0,0,.7) 100%);}
+  #low-ammo{color:#ff6b6b;}
+  #radar-wrap::after{content:"";position:absolute;inset:0;border-radius:50%;
+    box-shadow:inset 0 0 24px rgba(0,0,0,.65);pointer-events:none;}
+  #load-bar{width:220px;height:3px;background:#222;margin-top:18px;}
+  #load-fill{height:100%;width:8%;background:var(--blood);transition:width .3s;}
+
+  /* ---------- END SCREENS ---------- */
+  .end-screen{position:fixed;inset:0;z-index:60;background:rgba(4,2,2,.92);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;}
+  .end-title{font-family:'Oswald',sans-serif;font-weight:700;font-size:56px;letter-spacing:8px;margin:0;}
+  #deathscreen .end-title{color:var(--blood);text-shadow:0 0 30px rgba(200,20,20,.7);}
+  #winscreen .end-title{color:#5fe07f;text-shadow:0 0 30px rgba(60,220,110,.6);}
+  .end-sub{margin-top:10px;color:#c8c2b4;letter-spacing:2px;font-size:14px;}
+  .end-screen button{margin-top:28px;padding:12px 34px;font-family:'Oswald',sans-serif;letter-spacing:3px;
+    font-size:15px;background:transparent;border:1px solid #c8c2b4;color:#f2ede2;cursor:pointer;
+    text-transform:uppercase;}
+  .end-screen button:hover{background:#c8c2b4;color:#000;}
+
+  #loading{position:fixed;inset:0;z-index:70;background:#050505;color:#8a8477;display:flex;
+    flex-direction:column;align-items:center;justify-content:center;font-family:'Oswald',sans-serif;letter-spacing:3px;font-size:14px;gap:8px;}
+</style>
+</head>
+<body>
+
+<div id="loading">LOADING WRECKAGE…
+  <div id="load-bar"><div id="load-fill"></div></div>
+  <div id="load-status" style="font-size:11px;letter-spacing:2px;color:#5a564c">MODELS</div>
+</div>
+
+<div id="start-screen" class="hidden">
+  <div id="start-inner">
+    <h1 id="title">DEAD<span>WAY</span> CITY</h1>
+    <div id="subtitle">Vertical Slice — Redline Exodus</div>
+    <div id="build-tag">BUILD 2026-09-05-L — if this doesn't say "-L", you're on an old cached copy</div>
+    <button id="enter-btn">Enter The City</button>
+    <div id="controls-grid">
+      <div><b>WASD</b> Move</div>
+      <div><b>Mouse</b> Look / Aim</div>
+      <div><b>LMB</b> Shoot</div>
+      <div><b>RMB</b> Melee</div>
+      <div><b>Shift</b> Sprint</div>
+      <div><b>W W</b> (double-tap) Toggle sprint</div>
+      <div><b>Ctrl / C</b> Crouch</div>
+      <div><b>U</b> Adjust gun grip (dev)</div>
+      <div><b>[ / ]</b> Adjust character scale (dev)</div>
+      <div><b>Space</b> Jump / Handbrake</div>
+      <div><b>F</b> Enter / Exit Vehicle</div>
+      <div><b>V</b> Toggle First-Person</div>
+      <div><b>R</b> Reload</div>
+      <div><b>Esc</b> Release Mouse</div>
+    </div>
+    <div id="note">Desktop prototype — keyboard &amp; mouse required. Click "Enter The City" to lock your mouse and begin.</div>
+  </div>
+</div>
+
+<canvas id="game-canvas"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="crosshair"></div>
+  <div id="hitmarker"></div>
+
+  <div id="top-bar">
+    <div>
+      <div id="objective">Objective: <b>Fight through to the depot</b> — neutralize <span id="obj-count">0/10</span> infected.</div>
+      <div id="killcount">Kills: <span id="kills">0</span></div>
+    </div>
+    <div id="radar-wrap"><canvas id="radar" width="150" height="150"></canvas></div>
+  </div>
+
+  <!-- Objective compass: a big, unmissable arrow pointing at whatever the
+       current objective is (depot marker, then extraction). The radar dot
+       alone was too small/easy to miss — this sits front-and-center at
+       the top of the screen and rotates to always point the right way,
+       with a distance readout so "which way and how far" is answered at
+       a glance without opening a map. -->
+  <div id="objective-compass" class="hidden">
+    <div id="compass-arrow">▲</div>
+    <div id="compass-label">DEPOT</div>
+  </div>
+
+  <!-- Debug readout: shows exactly what the game thinks is happening right
+       now (which animation is playing, whether sprint input is detected,
+       current model scale). Added after several rounds of guessing at
+       invisible internal state — this makes it visible instead. -->
+  <div id="debug-readout"></div>
+
+  <div id="prompt" class="hidden"><b>F</b><span id="prompt-text">Enter Vehicle</span></div>
+
+  <div id="bottom-left">
+    <div class="bar-wrap">
+      <div class="bar-label">HEALTH</div>
+      <div class="bar-bg"><div class="bar-fill" id="health-fill" style="width:100%"></div></div>
+    </div>
+    <div class="bar-wrap">
+      <div class="bar-label">STAMINA</div>
+      <div class="bar-bg"><div class="bar-fill" id="stamina-fill" style="width:100%"></div></div>
+    </div>
+  </div>
+
+  <div id="bottom-right">
+    <div id="weapon-name">9mm Sidearm</div>
+    <div id="ammo">12<small> / 60</small></div>
+    <div id="reload-text" class="hidden">Reloading…</div>
+  </div>
+
+  <div id="speedo" class="hidden">
+    <div id="kph">0</div>
+    <small>KM/H</small>
+  </div>
+
+  <div id="killfeed"></div>
+</div>
+
+<div id="vignette"></div>
+<div id="blood-vignette"></div>
+<div id="screen-flash"></div>
+
+<div id="deathscreen" class="end-screen hidden">
+  <h1 class="end-title">YOU DIED</h1>
+  <div class="end-sub" id="death-stats">The infected claimed the block.</div>
+  <button onclick="location.reload()">Restart Demo</button>
+</div>
+
+<div id="winscreen" class="end-screen hidden">
+  <h1 class="end-title">AREA SECURED</h1>
+  <div class="end-sub" id="win-stats">Vertical slice complete.</div>
+  <button onclick="location.reload()">Play Again</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+  }
+}
+</script>
+<script type="module" src="game.js"></script>
+</body>
+</html>
