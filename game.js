@@ -1098,7 +1098,7 @@ for (let i = 0; i < 6; i++) spawnZombie();
 // spawn (see the Zombie constructor) instead of always using one model,
 // so the horde reads as a mixed crowd instead of identical clones.
 loadZombieTemplate('assets/zombie_running_on_metel_maniac.glb');
-loadZombieTemplate('assets/zombie_Running.glb');
+loadZombieTemplate('assets/nodel-rigged.glb');
 /* ---------------------------------------------------------------------
 6. PLAYER
 --------------------------------------------------------------------- */
