@@ -18,6 +18,6 @@ const LEVEL_CONFIG = {
   name: 'Level 2',
 };
 
-export function startLevel() {
-  bootLevel(LEVEL_CONFIG);
+export function startLevel(mode) {
+  bootLevel({ ...LEVEL_CONFIG, mode });
 }

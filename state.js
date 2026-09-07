@@ -25,6 +25,12 @@ export const state = {
   stage: 1, // 1 = clear the route, 2 = recover the sample, 3 = extract
   ingredientCollected: false,
 
+  // Day / Night — chosen on the mode-select screen (main.js) right after
+  // a level is picked. 'night' is the original look the game already
+  // had; 'day' is the new alternative. Scene.js reads this to drive
+  // lighting/sky/fog, and to decide whether rain + puddles are active.
+  timeOfDay: 'night',
+
   // Score / progress
   kills: 0,
   coins: 0,

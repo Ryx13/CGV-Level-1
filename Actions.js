@@ -9,6 +9,7 @@ import {
   forwardFromYaw, rightFromYaw,
   STREET_HALF_W, ZOMBIE_SPAWN_INTERVAL,
   updateFuelHUD as updateFuelHUDBase,
+  applyTimeOfDay, updateWeatherFX,
 } from './Scene.js';
 // Actions.js and characters.js import from each other (characters.js needs
 // damagePlayer/spawnHitSpark/spawnBlood for zombie hits; Actions.js needs
@@ -739,6 +740,11 @@ function initInputHandlers() {
 let missionTracker = null;
 
 export function bootLevel(levelConfig = {}) {
+  // Day/Night was picked on the mode-select screen (main.js), right after
+  // the level itself — apply it before anything else so lighting, fog,
+  // mist tint, rain visibility and puddles are all correct from frame one.
+  applyTimeOfDay(levelConfig.mode);
+
   // The intro screen and level-select screen (main.js) already ran before
   // this function was even called, so there's no further click to gate
   // gameplay-start behind — as soon as assets are ready, jump straight
@@ -799,6 +805,7 @@ function startAnimationLoop() {
     state.shake = Math.max(0, state.shake - dt * 1.8);
     state.meleeTimer = Math.max(0, state.meleeTimer - dt);
     sky.position.copy(camera.position);
+    updateWeatherFX(dt);
     if (!state.isDead && !state.paused && dom.hud && !dom.hud.classList.contains('hidden')) {
       stepAccumulator += dt;
       while (stepAccumulator >= FIXED_STEP) {
@@ -826,6 +833,10 @@ function startAnimationLoop() {
         viewmodelGun.visible = false;
         if (knifeViewModel) knifeViewModel.visible = false;
         if (playerVis.gunOnHand) playerVis.gunPivot.visible = false;
+ 
+ 
+ 
+ 
       } else {
         updatePlayerMovement(dt);
         updateCameraOnFoot(dt);

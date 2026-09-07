@@ -466,9 +466,46 @@ export function makeStreetlight(x, z) {
   );
   lamp.position.set(x + (x > 0 ? -1.35 : 1.35), 5.85, z);
   scene.add(lamp);
-  const pl = new THREE.PointLight(0xffc070, 1.15, 16, 1.8);
-  pl.position.copy(lamp.position);
-  scene.add(pl);
+
+  // SpotLight, not PointLight — this is what actually gives the light a
+  // cone-shaped falloff (a PointLight radiates evenly in every
+  // direction; a SpotLight only lights the area inside its angle, aimed
+  // straight down at the road). Streetlights stay switched on in BOTH
+  // modes: at night they're the primary light (sun is off — see
+  // applyTimeOfDay in Scene.js), so intensity/distance are pushed up
+  // from the original point-light numbers; in Day mode they're pushed
+  // up even further, since a modest lamp easily gets lost against full
+  // sunlight and needs real extra punch to still read as "on".
+  const isDay = state.timeOfDay === 'day';
+  const spot = new THREE.SpotLight(0xffc070, isDay ? 11 : 6.5, isDay ? 30 : 24, Math.PI / 5.5, 0.55, 1.6);
+  spot.position.copy(lamp.position);
+  const spotTarget = new THREE.Object3D();
+  spotTarget.position.set(lamp.position.x, 0, lamp.position.z); // straight down to the road surface
+  scene.add(spotTarget);
+  spot.target = spotTarget;
+  scene.add(spot);
+
+  // Visible cone mesh — a soft, additive-blended cone from the lamp
+  // down to the ground so the beam itself reads as a radiating cone of
+  // light (especially against the fog/haze), not just a lit patch of
+  // road with no visible source. Given more opacity in Day mode for the
+  // same reason as the SpotLight above — it needs to fight bright
+  // ambient light to stay visible.
+  const beamHeight = lamp.position.y;
+  const beamGeo = new THREE.ConeGeometry(2.6, beamHeight, 20, 1, true);
+  const beamMat = new THREE.MeshBasicMaterial({
+    color: 0xffc070,
+    transparent: true,
+    opacity: isDay ? 0.24 : 0.14,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    fog: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const beam = new THREE.Mesh(beamGeo, beamMat);
+  beam.position.set(lamp.position.x, lamp.position.y - beamHeight / 2, lamp.position.z);
+  scene.add(beam);
+
   addObstacle(x, z, 0.35);
 }
 
@@ -486,7 +523,7 @@ export function loadObstacles() {
     const z = -20 - i * 24;
     makeBarrier((i % 2 === 0 ? -2.4 : 2.4), z, Math.PI / 2 + (rnd() - 0.5) * 0.28);
   }
-  for (let z = 24; z > -STREET_LENGTH + 20; z -= 42) {
+  for (let z = 24; z > -STREET_LENGTH + 20; z -= 24) {
     makeStreetlight(-STREET_HALF_W + 0.55, z);
     makeStreetlight(STREET_HALF_W - 0.55, z);
   }
@@ -1048,7 +1085,7 @@ export function loadMainCharacter() {
    was baked into the base model, or to 'idle') — nothing else breaks.
 --------------------------------------------------------------------- */
 const SHOOTER_ANIM_FILES = {
-  idle: 'assets/rifle aiming idle.glb',
+  idle: '/rifle aiming idle.glb',
   walk: 'assets/walking.glb',
   sprint: 'assets/rifle run.glb',
   walkBack: 'assets/walking backwards.glb',

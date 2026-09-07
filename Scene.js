@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { state } from './state.js';
+import { createFogMaterial, fogUniforms, createRainMaterial, rainUniforms } from './shaders.js';
 
 /* ======================================================================
    Scene.js — RENDERER / SCENE / CAMERA / PHYSICS WORLD / HUD
@@ -157,13 +158,23 @@ scene.add(camera); // so a camera-attached first-person viewmodel (added later) 
 camera.position.set(3.4, 3.1, 38);
 camera.lookAt(1.5, 1.2, 22);
 
+const RAIN_DISTANCE = 3; // how far in front of the camera the rain card sits
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  // Rain plane is a flat card parented to the camera (defined further
+  // down this file) — keep it exactly filling the frustum at
+  // RAIN_DISTANCE so it always reads as full-screen rain rather than a
+  // visible floating rectangle. onResize() isn't called until after
+  // `rain` exists (see the explicit call right after it's created), and
+  // browsers never dispatch a real 'resize' event during a script's own
+  // synchronous top-level execution, so `rain` is always defined by the
+  // time this line can actually run.
+  const h = 2 * RAIN_DISTANCE * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.15;
+  rain.scale.set(h * camera.aspect, h, 1);
 }
 window.addEventListener('resize', onResize);
-onResize();
 
 function makeCanvas(w, h, draw) {
   const c = document.createElement('canvas');
@@ -172,7 +183,8 @@ function makeCanvas(w, h, draw) {
   return c;
 }
 
-const skyCanvas = makeCanvas(8, 64, (ctx, w, h) => {
+// NIGHT sky gradient — this is the game's original/default look, unchanged.
+const nightSkyCanvas = makeCanvas(8, 64, (ctx, w, h) => {
   const g = ctx.createLinearGradient(0, 0, 0, h);
   g.addColorStop(0, '#1c1a22');
   g.addColorStop(0.45, '#6a5346');
@@ -180,13 +192,28 @@ const skyCanvas = makeCanvas(8, 64, (ctx, w, h) => {
   g.addColorStop(1, '#d9b07a');
   ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
 });
-const skyTex = new THREE.CanvasTexture(skyCanvas);
+const nightSkyTex = new THREE.CanvasTexture(nightSkyCanvas);
+
+// DAY sky gradient — new, overcast/drizzly blue-grey so the Day mode
+// rain and mist actually make sense with what's overhead.
+const daySkyCanvas = makeCanvas(8, 64, (ctx, w, h) => {
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#7c93a8');
+  g.addColorStop(0.45, '#a7bac9');
+  g.addColorStop(0.75, '#c7d3dc');
+  g.addColorStop(1, '#dfe6ea');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+});
+const daySkyTex = new THREE.CanvasTexture(daySkyCanvas);
+
 export const sky = new THREE.Mesh(
   new THREE.SphereGeometry(420, 24, 16),
-  new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false, depthWrite: false })
+  new THREE.MeshBasicMaterial({ map: nightSkyTex, side: THREE.BackSide, fog: false, depthWrite: false })
 );
 scene.add(sky);
-scene.add(new THREE.HemisphereLight(0xe7c9a0, 0x1a1612, 0.55));
+
+const hemiLight = new THREE.HemisphereLight(0xe7c9a0, 0x1a1612, 0.55);
+scene.add(hemiLight);
 const sun = new THREE.DirectionalLight(0xffc48a, 1.15);
 sun.position.set(-80, 42, 30);
 sun.castShadow = true;
@@ -198,7 +225,181 @@ sun.shadow.bias = -0.0007;
 scene.add(sun);
 sun.target.position.set(0, 0, -50);
 scene.add(sun.target);
-scene.add(new THREE.AmbientLight(0x3a322c, 0.28));
+const ambientLight = new THREE.AmbientLight(0x3a322c, 0.28);
+scene.add(ambientLight);
+
+/* ---------------------------------------------------------------------
+   SUN DISC — a visible glowing disc placed in the sky along the exact
+   direction the DirectionalLight above already shines from (its
+   position IS that direction, since directional lights only care about
+   direction-to-target, never their literal distance). Parented to `sky`
+   so it automatically re-centers on the camera every frame the same way
+   the sky sphere already does (see sky.position.copy(camera.position)
+   in Actions.js's animate loop) — no extra per-frame code needed here.
+   Day-only: applyTimeOfDay() below toggles its visibility, since at
+   night there's no sun (see the streetlight-only night lighting further
+   down in this file / characters.js).
+--------------------------------------------------------------------- */
+const SUN_DISTANCE = 400; // just inside the 420-radius sky sphere
+const sunDir = sun.position.clone().normalize();
+const sunGlowCanvas = makeCanvas(64, 64, (ctx, w, h) => {
+  const g = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+  g.addColorStop(0, 'rgba(255,250,235,1)');
+  g.addColorStop(0.25, 'rgba(255,244,214,0.9)');
+  g.addColorStop(0.6, 'rgba(255,220,160,0.35)');
+  g.addColorStop(1, 'rgba(255,220,160,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+});
+export const sunVisual = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: new THREE.CanvasTexture(sunGlowCanvas),
+  transparent: true,
+  depthWrite: false,
+  depthTest: false,
+  fog: false,
+  blending: THREE.AdditiveBlending,
+}));
+sunVisual.position.copy(sunDir).multiplyScalar(SUN_DISTANCE);
+sunVisual.scale.set(95, 95, 1);
+sunVisual.renderOrder = -1; // draw with/just after the sky, behind everything else
+sky.add(sunVisual);
+
+/* ---------------------------------------------------------------------
+   DAY / NIGHT MODE
+
+   TIME_OF_DAY_CONFIG holds every value that differs between the two
+   modes; applyTimeOfDay() below just writes that data onto the
+   lights/fog/sky objects created above rather than rebuilding the
+   scene. Night no longer uses this DirectionalLight at all (sunIntensity
+   is 0) — visibility at night comes entirely from the streetlights in
+   characters.js instead, so their number/brightness matters more than it
+   used to.
+--------------------------------------------------------------------- */
+const TIME_OF_DAY_CONFIG = {
+  night: {
+    skyTex: nightSkyTex,
+    bgColor: SKY_COLOR,
+    fogColor: SKY_COLOR,
+    fogDensity: 0.009,
+    hemiSky: 0xe7c9a0, hemiGround: 0x1a1612, hemiIntensity: 0.55,
+    sunColor: 0xffc48a, sunIntensity: 0, sunVisible: false, // sun switched off — streetlights carry the night
+    ambientColor: 0x3a322c, ambientIntensity: 0.28,
+    hazeColor: 0xb9c4cf, hazeOpacity: 0.5, hazeCoverage: 0.35,
+    rainOn: false,
+    puddlesOn: false,
+  },
+  day: {
+    skyTex: daySkyTex,
+    bgColor: 0xaebccb,
+    fogColor: 0xb7c4d1,
+    fogDensity: 0.03, // thinner than night — daylight haze, not a wall of fog
+    hemiSky: 0xdfe7ee, hemiGround: 0x4a4c46, hemiIntensity: 0.95,
+    sunColor: 0xfff6e0, sunIntensity: 2.1, sunVisible: true, // strong, clearly-visible sun
+    ambientColor: 0x545c62, ambientIntensity: 0.42,
+    hazeColor: 0xe8ecef, hazeOpacity: 0.65, hazeCoverage: 0.6,
+    rainOn: true,
+    puddlesOn: true,
+  },
+};
+
+export function applyTimeOfDay(mode) {
+  const cfg = TIME_OF_DAY_CONFIG[mode] || TIME_OF_DAY_CONFIG.night;
+  state.timeOfDay = TIME_OF_DAY_CONFIG[mode] ? mode : 'night';
+
+  sky.material.map = cfg.skyTex;
+  sky.material.needsUpdate = true;
+  scene.background = new THREE.Color(cfg.bgColor);
+  scene.fog.color.setHex(cfg.fogColor);
+  scene.fog.density = cfg.fogDensity;
+
+  hemiLight.color.setHex(cfg.hemiSky);
+  hemiLight.groundColor.setHex(cfg.hemiGround);
+  hemiLight.intensity = cfg.hemiIntensity;
+  sun.color.setHex(cfg.sunColor);
+  sun.intensity = cfg.sunIntensity;
+  sunVisual.visible = cfg.sunVisible;
+  ambientLight.color.setHex(cfg.ambientColor);
+  ambientLight.intensity = cfg.ambientIntensity;
+
+  fogUniforms.uColor.value.setHex(cfg.hazeColor);
+  fogUniforms.uOpacity.value = cfg.hazeOpacity;
+  fogUniforms.uCoverage.value = cfg.hazeCoverage;
+  rain.visible = cfg.rainOn;
+
+  createPuddles(cfg.puddlesOn);
+}
+
+/* ---------------------------------------------------------------------
+   FOG — a horizontal plane sitting low to the ground, tracking the
+   camera's x/z each frame (see updateWeatherFX below) so it always
+   covers the area around the player. Density (and *where* fog banks
+   sit at all) is computed per-fragment from real world position in
+   shaders.js, so patches stay anchored to fixed spots rather than
+   sliding around as the camera moves.
+--------------------------------------------------------------------- */
+const FOG_HEIGHT = 1.4;
+export const fog = new THREE.Mesh(new THREE.PlaneGeometry(220, 220), createFogMaterial());
+fog.rotation.x = -Math.PI / 2;
+fog.position.y = FOG_HEIGHT;
+fog.renderOrder = 5;
+scene.add(fog);
+
+/* ---------------------------------------------------------------------
+   RAIN — a flat card parented to the camera so it always fills the
+   view. depthTest is off on its material (see shaders.js) so it draws
+   as a screen-space overlay regardless of what's in front of it in the
+   scene. Hidden by default; applyTimeOfDay() turns it on for Day mode.
+--------------------------------------------------------------------- */
+export const rain = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), createRainMaterial());
+rain.position.set(0, 0, -RAIN_DISTANCE);
+rain.renderOrder = 999;
+rain.visible = false;
+camera.add(rain);
+onResize(); // now that `rain` exists, size it correctly for the current viewport
+
+/* ---------------------------------------------------------------------
+   PUDDLES — Day mode only (they're there because of the drizzle).
+   Plain flat discs with a low-roughness, faintly reflective material;
+   there's no environment map in this scene so they won't mirror the
+   buildings, but the sun/hemisphere light still catches them with a
+   soft sheen, which is enough to read as "wet" at this game's scale.
+   Scattered with Math.random() rather than the deterministic mulberry32
+   RNG characters.js uses for world geometry — puddles are just weather
+   dressing, not gameplay-relevant placement, so nothing needs them to
+   be reproducible run-to-run.
+--------------------------------------------------------------------- */
+const puddleGroup = new THREE.Group();
+scene.add(puddleGroup);
+const puddleMaterial = new THREE.MeshStandardMaterial({
+  color: 0x141a20, roughness: 0.12, metalness: 0.25, transparent: true, opacity: 0.88,
+});
+const PUDDLE_COUNT = 22;
+export function createPuddles(enabled) {
+  puddleGroup.clear();
+  if (!enabled) return;
+  for (let i = 0; i < PUDDLE_COUNT; i++) {
+    const puddle = new THREE.Mesh(new THREE.CircleGeometry(1, 16), puddleMaterial);
+    const w = 1.2 + Math.random() * 2.4;
+    const l = 0.9 + Math.random() * 1.8;
+    puddle.scale.set(w, l, 1);
+    puddle.rotation.x = -Math.PI / 2;
+    puddle.rotation.z = Math.random() * Math.PI;
+    const x = (Math.random() - 0.5) * (STREET_HALF_W * 2 - 2.5);
+    const z = 30 - Math.random() * (STREET_LENGTH + 60);
+    puddle.position.set(x, 0.009, z);
+    puddleGroup.add(puddle);
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Per-frame weather tick — called from Actions.js's animate() loop
+   alongside the existing `sky.position.copy(camera.position)` line.
+--------------------------------------------------------------------- */
+export function updateWeatherFX(dt) {
+  fogUniforms.uTime.value += dt;
+  fog.position.x = camera.position.x;
+  fog.position.z = camera.position.z;
+  if (rain.visible) rainUniforms.uTime.value += dt;
+}
 
 /* ---------------------------------------------------------------------
    2. PHYSICS WORLD
