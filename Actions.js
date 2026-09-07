@@ -153,6 +153,28 @@ function enforceAmmoWeaponRule() {
   }
 }
 
+export function togglePause() {
+  if (state.isDead) return; // don't let pause interfere with the death/win screens
+  if (!dom.hud || dom.hud.classList.contains('hidden')) return; // no pausing before the level has even started
+  state.paused = !state.paused;
+  if (state.paused) {
+    if (dom.pauseOverlay) dom.pauseOverlay.classList.remove('hidden');
+    // Pointer lock has to go — otherwise the mouse stays trapped and
+    // invisible, and clicking the on-screen Resume button becomes
+    // impossible. Exiting it here also frees the cursor for anyone using
+    // the mouse instead of Tab to resume.
+    document.exitPointerLock();
+    sfx.setEngine(0, false);
+  } else {
+    if (dom.pauseOverlay) dom.pauseOverlay.classList.add('hidden');
+    // Re-lock automatically on resume so play continues immediately
+    // instead of requiring an extra click just to get mouse-look back —
+    // browsers allow this since the Tab press / button click that got us
+    // here counts as the required direct user gesture.
+    dom.canvas.requestPointerLock();
+  }
+}
+
 export function showHitmarker() {
   dom.hitmarker.classList.remove('show'); void dom.hitmarker.offsetWidth;
   dom.hitmarker.classList.add('show');
@@ -369,7 +391,11 @@ export function updateCameraOnFoot(dt) {
     if (knifeViewModel) knifeViewModel.rotation.x = viewmodelGun.rotation.x;
     return;
   }
-  playerVis.group.rotation.y = lerpAngle(playerVis.group.rotation.y, state.yaw, dt * 10);
+  playerVis.group.rotation.y = lerpAngle(
+    playerVis.group.rotation.y,
+    state.playerMoving ? state.playerFacingAngle : state.yaw,
+    dt * 10
+  );
   const origin = playerVis.group.position.clone().add(new THREE.Vector3(0, 1.52 - (state.crouching ? 0.42 : 0), 0));
   const fwd = forwardFromYaw(state.yaw);
   const right = rightFromYaw(state.yaw);
@@ -458,6 +484,18 @@ export function updatePlayerMovement(dt) {
   const move = new THREE.Vector3()
     .addScaledVector(fwd, forwardInput)
     .addScaledVector(right, strafeInput);
+  // Facing direction while moving — previously the body's rotation was
+  // tied directly to camera yaw regardless of movement, so strafing or
+  // walking backward still showed the character facing straight ahead
+  // instead of the direction they were actually headed. atan2(x,z)
+  // matches the same forward/right convention used everywhere else
+  // (forwardFromYaw, zombie facing, etc.), so a movement vector of pure
+  // "strafe right" correctly resolves to facing right, "backward" to
+  // facing back, and diagonals to the blended angle in between. Read
+  // before normalizing below — atan2 only cares about direction, not
+  // magnitude, so this doesn't need its own separate vector.
+  state.playerMoving = forwardInput !== 0 || strafeInput !== 0;
+  if (state.playerMoving) state.playerFacingAngle = Math.atan2(-move.x, -move.z);
   if (move.lengthSq() > 0) move.normalize().multiplyScalar(speed);
   // Direct assignment, not eased/lerped toward the previous velocity — a
   // self-referential lerp can get stuck at NaN forever if the body's
@@ -643,8 +681,14 @@ function initInputHandlers() {
     // split (it used to live inline in the old game.js keydown handler);
     // adjustPlayerScale() itself survived the split fine, it just had no
     // caller left. Re-wired here so [ / ] work again as the HUD hint claims.
-    if (e.code === 'BracketLeft') adjustPlayerScale(0.95);
-    if (e.code === 'BracketRight') adjustPlayerScale(1.05);
+    // e.repeat guard: holding the key down (even briefly) would otherwise
+    // fire the browser's key-repeat dozens of times per second, each one
+    // compounding another 5% shrink/grow — more than enough to silently
+    // drift the player down to a fraction of their intended size (this is
+    // almost certainly what happened to produce a reported height of
+    // 0.78m instead of ~1.8m). One press now means exactly one 5% step.
+    if (e.code === 'BracketLeft' && !e.repeat) adjustPlayerScale(0.95);
+    if (e.code === 'BracketRight' && !e.repeat) adjustPlayerScale(1.05);
   });
   window.addEventListener('keyup', (e) => { state.keys[e.code] = false; });
   dom.canvas.addEventListener('mousemove', (e) => {
@@ -677,7 +721,13 @@ function initInputHandlers() {
     if (e.code === 'KeyF') toggleVehicle();
     if (e.code === 'KeyV' && !state.inVehicle) state.firstPerson = !state.firstPerson;
     if (e.code === 'KeyQ') switchWeapon(state.currentWeapon === 'gun' ? 'knife' : 'gun');
+    if (e.code === 'Tab') {
+      e.preventDefault(); // Tab normally shifts browser focus — stop that
+      togglePause();
+    }
   });
+  if (dom.pauseBtn) dom.pauseBtn.addEventListener('click', () => togglePause());
+  if (dom.resumeBtn) dom.resumeBtn.addEventListener('click', () => togglePause());
 }
 
 /* ---------------------------------------------------------------------
@@ -749,7 +799,7 @@ function startAnimationLoop() {
     state.shake = Math.max(0, state.shake - dt * 1.8);
     state.meleeTimer = Math.max(0, state.meleeTimer - dt);
     sky.position.copy(camera.position);
-    if (!state.isDead && dom.hud && !dom.hud.classList.contains('hidden')) {
+    if (!state.isDead && !state.paused && dom.hud && !dom.hud.classList.contains('hidden')) {
       stepAccumulator += dt;
       while (stepAccumulator >= FIXED_STEP) {
         world.step(FIXED_STEP);

@@ -312,17 +312,42 @@ let shieldMesh = null;
 export function initShield() {
   if (shieldMesh) return;
   const shieldMaterial = createShieldMaterial();
-  shieldMesh = new THREE.Mesh(new THREE.SphereGeometry(1.05, 32, 24), shieldMaterial);
+  shieldMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), shieldMaterial); // unit sphere —
+                                                                                     // real size is set
+                                                                                     // fresh in activateShield()
   shieldMesh.visible = false;
   playerVis.group.add(shieldMesh);
-  shieldMesh.position.set(0, 1.0, 0);
 }
 
 export function activateShield(seconds) {
   state.shieldActive = true;
   state.shieldTimer = seconds;
   state.shieldDuration = seconds;
-  if (shieldMesh) shieldMesh.visible = true;
+  if (shieldMesh) {
+    // Sized from the player's ACTUAL current height, recomputed fresh
+    // every activation, instead of a hardcoded radius — the player's
+    // scale has changed several times over this project and is still
+    // live-adjustable with [ / ], so a fixed number drifts out of sync
+    // with whatever the correct size currently is. This can't go stale.
+    // Clamped to a plausible human range: confirmed the [ / ] keys could
+    // drift state.playerCurrentHeight down to ~0.78m from unguarded
+    // browser key-repeat (fixed separately), but this clamp means even
+    // if scale drifts for some other reason in the future, the shield
+    // won't blindly shrink to match nonsense — same defensive principle
+    // as the zombie ground-clamp sanity check.
+    const rawHeight = state.playerCurrentHeight || 1.8;
+    const height = THREE.MathUtils.clamp(rawHeight, 1.4, 2.2);
+    const radius = height * 1.4; // was 1.24 — a little bigger, per feedback
+    const centerY = height * 0.5;
+    console.log('[shield] state.playerCurrentHeight:', state.playerCurrentHeight, '-> clamped height:', height, '-> radius:', radius, '-> centerY:', centerY);
+    state.shieldRadius = radius; // exposed so zombies can treat the shield
+                                  // as a real physical barrier, not just a
+                                  // damage-immunity flag — see characters.js
+    shieldMesh.geometry.dispose();
+    shieldMesh.geometry = new THREE.SphereGeometry(radius, 32, 24);
+    shieldMesh.position.set(0, centerY, 0);
+    shieldMesh.visible = true;
+  }
   pushKillFeed('Shield active — 15s of full protection');
   updateShieldHUD();
 }

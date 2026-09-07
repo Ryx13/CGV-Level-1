@@ -55,6 +55,9 @@ export const dom = {
   deathStats: document.getElementById('death-stats'),
   winStats: document.getElementById('win-stats'),
   bloodVig: document.getElementById('blood-vignette'),
+  pauseBtn: document.getElementById('pause-btn'),
+  pauseOverlay: document.getElementById('pause-overlay'),
+  resumeBtn: document.getElementById('resume-btn'),
 };
 
 export function addObstacle(x, z, r) { state.obstacles.push({ x, z, r }); }

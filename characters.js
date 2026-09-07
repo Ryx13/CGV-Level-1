@@ -848,7 +848,21 @@ viewmodelGun.visible = false;
 camera.add(viewmodelGun);
 
 const PLAYER_TARGET_HEIGHT = 1.9;
-const PLAYER_FOOT_ADJUST = 1.0;
+const PLAYER_FOOT_ADJUST = 0.05; // was 1.0 — that's a full meter of vertical
+                                  // offset applied to the rig's LOCAL position
+                                  // inside playerVis.group every time
+                                  // applyPlayerScale() runs. This is meant to
+                                  // be a tiny ground-clearance epsilon (to avoid
+                                  // z-fighting with the floor), not a height
+                                  // adjustment — at 1.0 the visible character
+                                  // model renders a full meter above where the
+                                  // camera/physics/gun all expect it to be,
+                                  // which is exactly "the body disappeared,
+                                  // I'm just a floating gun": the gun still
+                                  // tracks the hand bone's real (now 1m-too-high)
+                                  // world position correctly, while the body
+                                  // itself ends up pushed out of the expected
+                                  // view.
 let playerRigObjRef = null;
 export const ZOMBIE_TARGET_HEIGHT = 1.8;
 
@@ -921,7 +935,7 @@ export function triggerShootAnim() {
 }
 
 export function loadMainCharacter() {
-  new GLTFLoader().load('assets/zombie_walker.glb', (gltf) => {
+  new GLTFLoader().load('assets/player_character.glb', (gltf) => {
     const obj = gltf.scene;
     const box0 = new THREE.Box3().setFromObject(obj);
     const size = new THREE.Vector3(); box0.getSize(size);
@@ -994,11 +1008,21 @@ export function loadMainCharacter() {
     }
     state.loadFlags.player = true;
     markLoaded('player');
-    // Shooter_Pack — a set of per-animation FBX exports made for this
-    // same rifle-carrying rig (walk/run/strafe/jump/fire in each
-    // direction). Loaded last so it can layer on top of / replace
-    // whatever the base model already provided above.
-    loadShooterPack();
+    // Shooter_Pack DISABLED — verified its files (walking.glb etc.) use
+    // 'L_Wrist'/'bone_12'/'Pelvis'-style bone names, the same skeleton as
+    // the WRONG zombie_walker.glb model this loader used to point at, not
+    // player_character.glb's actual rig ('hand_r'/'foot_l'/'pelvis').
+    // AnimationMixer resolves tracks by exact bone name, so binding these
+    // clips to player_character.glb's rig finds nothing to attach to and
+    // does nothing — but it still OVERWRITES the walk/sprint/idle/jump
+    // actions already correctly set up above from the model's own real
+    // clips (Walk/Run_Anime/Jump_2/Pistol_Idle), replacing working
+    // animations with non-functional ones. That's the direct cause of
+    // "stuck in the pistol-pointing pose, no walk/run/jump" — the working
+    // idle pose was the last thing to actually animate before being
+    // clobbered. If a Shooter_Pack rebuilt for player_character.glb's
+    // actual skeleton becomes available later, re-enable this call.
+    // loadShooterPack();
   }, undefined, (err) => {
     console.error('Player model failed to load:', err);
     pushKillFeed('Player model failed to load — using fallback body');
@@ -1403,7 +1427,31 @@ function measureAnkleToSole(rigObj, boneL, boneR) {
   if (boneL) { boneL.getWorldPosition(_groundClampTmp); lowY = Math.min(lowY, _groundClampTmp.y); }
   if (boneR) { boneR.getWorldPosition(_groundClampTmp); lowY = Math.min(lowY, _groundClampTmp.y); }
   if (!isFinite(lowY) || !isFinite(box.min.y)) return ANKLE_TO_SOLE;
-  return lowY - box.min.y;
+  // Confirmed via runtime logging (both on clones AND on the original
+  // template, ruling out cloning as the cause): for model-rigged.glb this
+  // computation produces a NEGATIVE value — the ankle bone measuring as
+  // being below the mesh's own lowest point, which is impossible. The
+  // real explanation: Box3.setFromObject() on a SkinnedMesh measures the
+  // RAW, UNPOSED vertex geometry transformed only by the mesh node's own
+  // transform — it has no knowledge of the skeleton/joints at all
+  // (skinning happens on the GPU, invisible to this kind of CPU query).
+  // For a standard Mixamo rig the mesh node and skeleton happen to align
+  // well enough that this works by coincidence; model-rigged.glb's
+  // differently-authored rig (it has an unusual, non-sequential joint
+  // index order) apparently doesn't have that coincidental alignment, so
+  // the box is meaningless relative to where the joints actually are.
+  // Rather than trust a number that's already proven nonsensical for
+  // this file, validate it's within a plausible human range first.
+  const raw = lowY - box.min.y;
+  if (raw < 0.01 || raw > 0.35) {
+    console.log('[measureAnkleToSole] rejected implausible value', raw.toFixed(3), '— using default', ANKLE_TO_SOLE);
+    return ANKLE_TO_SOLE;
+  }
+  // Small safety margin: accounts for a real gait shifting the foot's
+  // actual ground-contact point between heel-strike and toe-off through
+  // the stride, which a single fixed offset can't perfectly match every
+  // frame of.
+  return raw + 0.02;
 }
 
 /* ---------------------------------------------------------------------
@@ -1451,7 +1499,23 @@ function loadZombieTemplate(path, opts = {}) {
     box = new THREE.Box3().setFromObject(obj);
     const footOffset = -box.min.y + 0.05;
     obj.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-    zombieTemplates.push({ scene: obj, animations: gltf.animations || [], footOffset, runs: !!opts.runs });
+    // Ankle-to-sole measured HERE, once, on the original template — not
+    // re-measured per-instance on each skeletonClone() copy. Confirmed via
+    // runtime logging that model-rigged.glb's CLONED instances produce a
+    // nonsensical NEGATIVE ankle-to-sole (the ankle bone measuring as
+    // being below the mesh's own lowest point, which is geometrically
+    // impossible), while the original un-cloned template measures fine.
+    // That specific model's skin has a scrambled, non-sequential joint
+    // index order, which is the most likely reason cloning desyncs the
+    // bones from the mesh's actual bounds for this rig specifically.
+    // Measuring once against the trustworthy original and reusing that
+    // same number for every spawned instance sidesteps the problem
+    // entirely, whatever its exact cause.
+    const footBoneL = findBoneLike(obj, 'LeftFoot') || findBoneLike(obj, 'L_Ankle') || findBoneLike(obj, 'Left_Ankle') || null;
+    const footBoneR = findBoneLike(obj, 'RightFoot') || findBoneLike(obj, 'R_Ankle') || findBoneLike(obj, 'Right_Ankle') || null;
+    const templateAnkleToSole = measureAnkleToSole(obj, footBoneL, footBoneR);
+    console.log('[zombie template]', path, 'template-measured ankleToSole:', templateAnkleToSole.toFixed(3));
+    zombieTemplates.push({ scene: obj, animations: gltf.animations || [], footOffset, runs: !!opts.runs, path, ankleToSole: templateAnkleToSole });
     state.loadFlags.zombie = true;
     markLoaded('zombie');
     if (!zombieTemplateResolved) {
@@ -1488,12 +1552,37 @@ export class Zombie {
       rigInstance.rotation.y = state.ZOMBIE_RIG_YAW_OFFSET;
       this.mesh.add(rigInstance);
       this.rigObj = rigInstance;
-      this.footBoneL = findBoneLike(rigInstance, 'LeftFoot') || null;
-      this.footBoneR = findBoneLike(rigInstance, 'RightFoot') || null;
+      this.footBoneL = findBoneLike(rigInstance, 'LeftFoot') || findBoneLike(rigInstance, 'L_Ankle') || findBoneLike(rigInstance, 'Left_Ankle') || null;
+      this.footBoneR = findBoneLike(rigInstance, 'RightFoot') || findBoneLike(rigInstance, 'R_Ankle') || findBoneLike(rigInstance, 'Right_Ankle') || null;
+      // model-rigged.glb (the one whose feet were sinking) names its foot
+      // bones 'L_Ankle'/'R_Ankle' — a completely different convention from
+      // zombie_running_on_metel_maniac.glb's Mixamo-style
+      // 'mixamorig:LeftFoot_058'. The search above only tried the Mixamo
+      // pattern, so for this specific model both bones came back null,
+      // groundClampRig() silently no-ops every frame (it early-returns
+      // when both bones are missing), and the zombie's Y position is
+      // whatever was set once at spawn from a bind-pose bounding box —
+      // never corrected once the run animation actually starts bending
+      // the legs. That's the sinking.
       // Measured per-instance rather than assuming the shared ANKLE_TO_SOLE
       // constant fits this rig — model-rigged.glb's proportions differ from
       // the other zombie template, which is why its feet were sinking.
-      this.ankleToSole = measureAnkleToSole(rigInstance, this.footBoneL, this.footBoneR);
+      this.ankleToSole = (template.ankleToSole !== undefined && isFinite(template.ankleToSole) && template.ankleToSole > 0)
+        ? template.ankleToSole
+        : measureAnkleToSole(rigInstance, this.footBoneL, this.footBoneR); // fallback, shouldn't be needed
+      this.runs = !!(template && template.runs);
+      // Temporary diagnostic — please open the browser console and paste
+      // back what this prints for the zombie that's sinking. Static file
+      // analysis (checked bind-pose bone positions, bounding boxes, and
+      // animation channels by hand) didn't turn up an obvious cause, so
+      // the next step is seeing the ACTUAL runtime numbers rather than
+      // guessing at another margin value.
+      console.log('[zombie spawn]', template.path,
+        'footBoneL:', this.footBoneL ? this.footBoneL.name : 'NOT FOUND',
+        'footBoneR:', this.footBoneR ? this.footBoneR.name : 'NOT FOUND',
+        'footOffset:', template.footOffset.toFixed(3),
+        'ankleToSole (used):', this.ankleToSole.toFixed(3),
+        'rigInstance.position.y:', rigInstance.position.y.toFixed(3));
       if (template.animations.length) {
         this.hasAnim = true;
         this.mixer = new THREE.AnimationMixer(rigInstance);
@@ -1611,8 +1700,16 @@ export class Zombie {
     const toPlayer = new THREE.Vector3().subVectors(playerPos, this.mesh.position);
     toPlayer.y = 0;
     const dist = toPlayer.length();
-    if (dist < 26) this.state = dist < 1.55 ? 'attack' : 'chase';
-    else if (this.state !== 'idle') this.state = 'idle';
+    // Shield up: attack range effectively becomes "wherever the shield's
+    // surface is", not the normal 1.55 melee range — a zombie should
+    // never even reach attack range while the shield is holding it off,
+    // since it can't physically get close enough to swing.
+    const attackRange = state.shieldActive ? Math.max(1.55, (state.shieldRadius || 0) + 0.4) : 1.55;
+    if (dist < 26) {
+      this.state = (dist < attackRange && !state.shieldActive) ? 'attack' : 'chase';
+    } else if (this.state !== 'idle') {
+      this.state = 'idle';
+    }
     const others = state.zombies.filter((z) => z !== this && z.alive).map((z) => ({
       x: z.mesh.position.x, z: z.mesh.position.z, r: 0.7,
     }));
@@ -1621,13 +1718,30 @@ export class Zombie {
       avoidObstacles(this.mesh.position, move, others);
       const PLAYER_RADIUS = 0.32;
       const ZOMBIE_RADIUS = 0.65;
-      const MIN_DISTANCE = PLAYER_RADIUS + ZOMBIE_RADIUS;
+      // While the shield is up, nothing should be able to close to less
+      // than the shield's own radius (plus a little for the zombie's own
+      // body, so it stops at the surface rather than clipping into it) —
+      // otherwise "no damage" was true, but zombies could still visually
+      // walk straight through the bubble and stand on top of the player.
+      const MIN_DISTANCE = state.shieldActive
+        ? Math.max(PLAYER_RADIUS + ZOMBIE_RADIUS, (state.shieldRadius || 0) + ZOMBIE_RADIUS * 0.6)
+        : PLAYER_RADIUS + ZOMBIE_RADIUS;
       const nextX = this.mesh.position.x + move.x * this.speed * dt;
       const nextZ = this.mesh.position.z + move.z * this.speed * dt;
       const nextDist = Math.hypot(playerPos.x - nextX, playerPos.z - nextZ);
       if (nextDist > MIN_DISTANCE) {
         this.mesh.position.x = nextX;
         this.mesh.position.z = nextZ;
+      } else if (state.shieldActive && dist < MIN_DISTANCE) {
+        // Already inside the shield boundary the instant it activated
+        // (e.g. was mid-attack when the player picked it up) — the check
+        // above only stops further approach, it wouldn't evict someone
+        // already inside. Push back out to exactly the shield's surface
+        // instead of leaving them frozen in place still visually "through" it.
+        const pushBack = new THREE.Vector3().subVectors(this.mesh.position, playerPos).normalize();
+        if (pushBack.lengthSq() < 0.0001) pushBack.set(1, 0, 0); // avoid a zero-vector edge case if exactly overlapping
+        this.mesh.position.x = playerPos.x + pushBack.x * MIN_DISTANCE;
+        this.mesh.position.z = playerPos.z + pushBack.z * MIN_DISTANCE;
       }
       this.mesh.position.x = clampZombieX(this.mesh.position.x, this.mesh.position.z);
       const targetAngle = Math.atan2(move.x, move.z);
@@ -1680,7 +1794,14 @@ export class Zombie {
     } else if (!this.rigged) {
       this.animateWalk(dt, rate);
     }
-    if (this.rigged) groundClampRig(this.rigObj, this.footBoneL, this.footBoneR, dt, 10, this.ankleToSole);
+    // Runners (model-rigged.glb, this.runs) get a much snappier ground-clamp
+    // correction rate (22 vs 10) — their animation plays at 1.15x speed with
+    // a more exaggerated stride, and the default lerp-based correction rate
+    // was tuned for the slower 0.4x shambling walk. If it can't keep up with
+    // how fast the foot bones actually move, the correction visibly lags
+    // behind the animation and reads as the feet clipping into the ground
+    // even though the bones ARE being found and clamped correctly now.
+    if (this.rigged) groundClampRig(this.rigObj, this.footBoneL, this.footBoneR, dt, this.runs ? 22 : 10, this.ankleToSole);
   }
   animateWalk(dt, rate) {
     this.wobble += dt * rate * 0.35;

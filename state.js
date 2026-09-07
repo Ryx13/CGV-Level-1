@@ -37,16 +37,25 @@ export const state = {
   playerMaxHealth: 100,
   playerStamina: 100,
   isDead: false,
+  paused: false,
   walkCycle: 0,
   footTimer: 0,
   crouching: false,
   isSprinting: false,
+  playerMoving: false,
+  playerFacingAngle: 0,
   playerActionLock: 0,
   meleeTimer: 0,
   bobPhase: 0,
   sprintToggle: false,
   lastWTapTime: 0,
-  playerScaleOverride: 0.55,
+  playerScaleOverride: 0.5, // was 0.55 — measured "a little too big" now that
+                            // ground-clamping actually works (previously this
+                            // number was being judged against a floating,
+                            // wrongly-modeled character, so it wasn't a
+                            // reliable data point). Still live-adjustable
+                            // with [ / ] against the debug readout's meters
+                            // display.
   playerBaseScale: 1,
   playerCurrentHeight: 0,
 
@@ -78,6 +87,8 @@ export const state = {
   shieldActive: false,
   shieldTimer: 0,
   shieldDuration: 15,
+  shieldRadius: 0, // set fresh each activation (PowerUps.js) — also used by
+                    // characters.js to keep zombies from walking through it
 
   // Misc scene feel
   shake: 0,

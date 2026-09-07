@@ -111,6 +111,11 @@
 
   #top-bar{position:absolute;top:0;left:0;right:0;padding:16px 22px;display:flex;justify-content:space-between;
     align-items:flex-start;}
+  #pause-btn{position:absolute;top:16px;right:178px;pointer-events:auto;cursor:pointer;
+    width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);
+    color:#f2ede2;font-family:'Oswald',sans-serif;font-size:14px;letter-spacing:1px;
+    display:flex;align-items:center;justify-content:center;}
+  #pause-btn:hover{background:rgba(255,255,255,.08);}
   #objective{background:var(--panel);border:1px solid var(--line);padding:8px 14px;font-size:13px;
     letter-spacing:1px;max-width:340px;}
   #objective b{color:var(--amber);font-family:'Oswald',sans-serif;}
@@ -194,7 +199,7 @@
   <div id="start-inner">
     <h1 id="title">DEAD<span>WAY</span> CITY</h1>
     <div id="subtitle">Vertical Slice — Redline Exodus</div>
-    <div id="build-tag">BUILD 2026-09-05-L — if this doesn't say "-L", you're on an old cached copy</div>
+    <div id="build-tag">BUILD 2026-09-05-AD — if this doesn't say "-AD", you're on an old cached copy</div>
     <button id="enter-btn">Enter The City</button>
     <div id="controls-grid">
       <div><b>WASD</b> Move</div>
@@ -210,6 +215,7 @@
       <div><b>F</b> Enter / Exit Vehicle</div>
       <div><b>V</b> Toggle First-Person</div>
       <div><b>R</b> Reload</div>
+      <div><b>Tab</b> Pause</div>
       <div><b>Esc</b> Release Mouse</div>
     </div>
     <div id="note">Desktop prototype — keyboard &amp; mouse required. Click "Enter The City" to choose your deployment zone.</div>
@@ -227,6 +233,7 @@
       <div id="objective">Objective: <b>Fight through to the depot</b> — neutralize <span id="obj-count">0/10</span> infected.</div>
       <div id="killcount">Kills: <span id="kills">0</span></div>
     </div>
+    <button id="pause-btn" title="Pause (Tab)">II</button>
     <div id="radar-wrap"><canvas id="radar" width="150" height="150"></canvas></div>
   </div>
 
@@ -288,6 +295,12 @@
   <h1 class="end-title">AREA SECURED</h1>
   <div class="end-sub" id="win-stats">Vertical slice complete.</div>
   <button onclick="location.reload()">Play Again</button>
+</div>
+
+<div id="pause-overlay" class="end-screen hidden">
+  <h1 class="end-title">PAUSED</h1>
+  <div class="end-sub">Press Tab or click below to resume.</div>
+  <button id="resume-btn">Resume</button>
 </div>
 
 <script type="importmap">
