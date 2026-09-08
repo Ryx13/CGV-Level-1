@@ -11,6 +11,7 @@ import {
 } from './Scene.js';
 import { spawnPickup, spawnCoin, registerKillstreak } from './PowerUps.js';
 import { damagePlayer, spawnHitSpark, spawnBlood } from './Actions.js';
+import { createFireMaterial, createToxicMaterial } from './shaders.js';
 
 /* ======================================================================
    characters.js — LOADING/CREATION OF CHARACTERS AND SCENE OBJECTS
@@ -41,6 +42,40 @@ export function makeCanvas(w, h, draw) {
   c.width = w; c.height = h;
   draw(c.getContext('2d'), w, h);
   return c;
+}
+
+// Derives a tileable normal map from a painted grayscale height canvas —
+// `heightDraw` should paint brightness-as-elevation (mid-grey #808080 is
+// "flat", lighter is raised, darker is recessed), the same way the colour
+// textures below paint diffuse detail. A simple central-difference slope
+// (sampled with wraparound so it repeats cleanly) is converted straight
+// into a packed (x,y,z)->(r,g,b) tangent-space normal. This is what lets
+// MeshStandardMaterial actually catch light across bumps/pebbles/cracks
+// instead of just showing a flat-shaded painted-on picture of them.
+export function makeNormalMap(w, h, heightDraw, strength = 1.6) {
+  const src = makeCanvas(w, h, heightDraw).getContext('2d').getImageData(0, 0, w, h).data;
+  const heightAt = (x, y) => {
+    const i = (((y + h) % h) * w + ((x + w) % w)) * 4;
+    return src[i] / 255;
+  };
+  const out = document.createElement('canvas');
+  out.width = w; out.height = h;
+  const octx = out.getContext('2d');
+  const img = octx.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dx = (heightAt(x - 1, y) - heightAt(x + 1, y)) * strength;
+      const dy = (heightAt(x, y - 1) - heightAt(x, y + 1)) * strength;
+      const len = Math.hypot(dx, dy, 1.0);
+      const i = (y * w + x) * 4;
+      img.data[i] = ((dx / len) * 0.5 + 0.5) * 255;
+      img.data[i + 1] = ((dy / len) * 0.5 + 0.5) * 255;
+      img.data[i + 2] = ((1.0 / len) * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  octx.putImageData(img, 0, 0);
+  return new THREE.CanvasTexture(out);
 }
 
 export const asphaltTex = new THREE.CanvasTexture(makeCanvas(512, 512, (ctx, w, h) => {
@@ -99,6 +134,28 @@ export const asphaltTex = new THREE.CanvasTexture(makeCanvas(512, 512, (ctx, w, 
 asphaltTex.wrapS = asphaltTex.wrapT = THREE.RepeatWrapping;
 asphaltTex.repeat.set(6, 40);
 asphaltTex.anisotropy = 8;
+
+// Bump detail for the road — grit specks plus a few embossed cracks,
+// painted at the same relative scale/density as asphaltTex's own detail
+// so the two line up when tiled together.
+export const asphaltNormalTex = makeNormalMap(256, 256, (ctx, w, h) => {
+  ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 2200; i++) {
+    const v = 110 + Math.random() * 110;
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+  }
+  ctx.strokeStyle = 'rgba(30,30,30,0.8)'; ctx.lineWidth = 1.2;
+  for (let i = 0; i < 10; i++) {
+    ctx.beginPath();
+    let x = Math.random() * w, y = Math.random() * h;
+    ctx.moveTo(x, y);
+    for (let j = 0; j < 6; j++) { x += (Math.random() - 0.5) * 40; y += (Math.random() - 0.5) * 40; ctx.lineTo(x, y); }
+    ctx.stroke();
+  }
+}, 1.4);
+asphaltNormalTex.wrapS = asphaltNormalTex.wrapT = THREE.RepeatWrapping;
+asphaltNormalTex.repeat.copy(asphaltTex.repeat);
 
 export const sidewalkTex = new THREE.CanvasTexture(makeCanvas(128, 128, (ctx, w, h) => {
   ctx.fillStyle = '#6a655c'; ctx.fillRect(0, 0, w, h);
@@ -169,6 +226,16 @@ export const concreteTex = new THREE.CanvasTexture(makeCanvas(128, 128, (ctx, w,
 }));
 concreteTex.wrapS = concreteTex.wrapT = THREE.RepeatWrapping;
 
+export const concreteNormalTex = makeNormalMap(128, 128, (ctx, w, h) => {
+  ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 1200; i++) {
+    const v = 120 + Math.random() * 100;
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+  }
+}, 1.2);
+concreteNormalTex.wrapS = concreteNormalTex.wrapT = THREE.RepeatWrapping;
+
 export const bloodTex = new THREE.CanvasTexture(makeCanvas(64, 64, (ctx, w, h) => {
   const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
   g.addColorStop(0, 'rgba(120,8,8,0.85)');
@@ -176,6 +243,137 @@ export const bloodTex = new THREE.CanvasTexture(makeCanvas(64, 64, (ctx, w, h) =
   g.addColorStop(1, 'rgba(40,0,0,0)');
   ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
 }));
+
+/* ---------------------------------------------------------------------
+   NEW TEXTURES — dirt ground, tar roofs, rusted metal, zombie skin.
+   Previously the bare ground (dirtMat), every roof, and every zombie's
+   skin were flat, untextured colours — the only surfaces in the whole
+   level with no map at all. These follow the exact same
+   "makeCanvas + CanvasTexture" recipe already used above.
+--------------------------------------------------------------------- */
+export const dirtTex = new THREE.CanvasTexture(makeCanvas(256, 256, (ctx, w, h) => {
+  ctx.fillStyle = '#3a3530'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 40; i++) {
+    const x = Math.random() * w, y = Math.random() * h, r = 10 + Math.random() * 26;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const v = 40 + Math.random() * 30;
+    grad.addColorStop(0, `rgba(${v},${v - 6},${v - 12},0.35)`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = 0; i < 3000; i++) {
+    const v = 25 + Math.random() * 35;
+    ctx.fillStyle = `rgba(${v},${v - 4},${v - 10},${Math.random() * 0.5})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+  }
+  // Small pebbles, each with a tiny dark shadow so they read as raised
+  // even before the normal map (below) does the real lighting work.
+  for (let i = 0; i < 160; i++) {
+    const x = Math.random() * w, y = Math.random() * h, r = 0.8 + Math.random() * 2.2;
+    const v = 70 + Math.random() * 50;
+    ctx.fillStyle = `rgba(10,9,8,0.4)`;
+    ctx.beginPath(); ctx.arc(x + r * 0.4, y + r * 0.4, r * 0.6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(${v},${v - 6},${v - 14},0.85)`;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(15,13,10,0.5)'; ctx.lineWidth = 1;
+  for (let i = 0; i < 10; i++) {
+    ctx.beginPath();
+    let x = Math.random() * w, y = Math.random() * h;
+    ctx.moveTo(x, y);
+    for (let j = 0; j < 5; j++) { x += (Math.random() - 0.5) * 30; y += (Math.random() - 0.5) * 30; ctx.lineTo(x, y); }
+    ctx.stroke();
+  }
+}));
+dirtTex.wrapS = dirtTex.wrapT = THREE.RepeatWrapping;
+dirtTex.repeat.set(24, 60);
+dirtTex.anisotropy = 8;
+
+export const dirtNormalTex = makeNormalMap(256, 256, (ctx, w, h) => {
+  ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 3000; i++) {
+    const v = 100 + Math.random() * 100;
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+  }
+  for (let i = 0; i < 160; i++) {
+    const x = Math.random() * w, y = Math.random() * h, r = 1 + Math.random() * 2.5;
+    const v = 150 + Math.random() * 90;
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+}, 2.2);
+dirtNormalTex.wrapS = dirtNormalTex.wrapT = THREE.RepeatWrapping;
+dirtNormalTex.repeat.copy(dirtTex.repeat);
+
+export const roofTex = new THREE.CanvasTexture(makeCanvas(128, 128, (ctx, w, h) => {
+  ctx.fillStyle = '#232320'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 900; i++) {
+    const v = 35 + Math.random() * 45;
+    ctx.fillStyle = `rgba(${v},${v - 2},${v - 6},${0.3 + Math.random() * 0.4})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 1.5, 1.5);
+  }
+  // Tar-paper seams
+  ctx.strokeStyle = 'rgba(10,10,8,0.6)'; ctx.lineWidth = 2;
+  for (let x = 16; x < w; x += 32) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  // Gravel speckle
+  for (let i = 0; i < 220; i++) {
+    const v = 90 + Math.random() * 60;
+    ctx.fillStyle = `rgba(${v},${v - 8},${v - 16},0.5)`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+  }
+}));
+roofTex.wrapS = roofTex.wrapT = THREE.RepeatWrapping;
+roofTex.repeat.set(3, 3);
+
+export const rustTex = new THREE.CanvasTexture(makeCanvas(128, 128, (ctx, w, h) => {
+  ctx.fillStyle = '#4a4640'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 14; i++) {
+    const x = Math.random() * w, y = Math.random() * h, r = 8 + Math.random() * 24;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, 'rgba(150,70,25,0.65)');
+    grad.addColorStop(0.6, 'rgba(110,50,18,0.35)');
+    grad.addColorStop(1, 'rgba(110,50,18,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = 0; i < 700; i++) {
+    const v = 40 + Math.random() * 50;
+    ctx.fillStyle = `rgba(${v + 20},${v - 6},${v - 20},${Math.random() * 0.4})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 1.5, 1.5);
+  }
+}));
+rustTex.wrapS = rustTex.wrapT = THREE.RepeatWrapping;
+rustTex.repeat.set(2, 2);
+
+export const zombieSkinTex = new THREE.CanvasTexture(makeCanvas(128, 128, (ctx, w, h) => {
+  ctx.fillStyle = '#9a9a90'; ctx.fillRect(0, 0, w, h);
+  // Blotchy decay/bruising, tinted by whichever colour the material using
+  // this map multiplies it with (zombieMat1/zombieMat2 below).
+  for (let i = 0; i < 40; i++) {
+    const x = Math.random() * w, y = Math.random() * h, r = 4 + Math.random() * 14;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, 'rgba(40,20,16,0.5)');
+    grad.addColorStop(1, 'rgba(40,20,16,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = 0; i < 20; i++) {
+    const x = Math.random() * w, y = Math.random() * h, r = 2 + Math.random() * 6;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, 'rgba(90,20,20,0.55)');
+    grad.addColorStop(1, 'rgba(90,20,20,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = 0; i < 1400; i++) {
+    const v = 60 + Math.random() * 50;
+    ctx.fillStyle = `rgba(${v - 30},${v},${v - 40},${Math.random() * 0.3})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+  }
+}));
+zombieSkinTex.wrapS = zombieSkinTex.wrapT = THREE.RepeatWrapping;
 
 const smokeTex = new THREE.CanvasTexture(makeCanvas(64, 64, (ctx, w, h) => {
   const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
@@ -196,6 +394,23 @@ export function spawnFireEffect(pos, scale = 1) {
   state.smokeGroups.push(group);
 }
 
+// Actual flame, drawn beneath the smoke above — previously "burning"
+// wrecks had smoke and a point light but no visible fire at all. A cross
+// of two perpendicular planes (cheap stand-in for a billboard when the
+// camera never gets to fly around freely) is enough for the animated
+// fireFragmentShader flame to read correctly from any angle you'd
+// actually approach a wreck from at street level.
+const flameGeo = new THREE.PlaneGeometry(1.1, 1.9);
+export function spawnFlameBillboards(pos, scale = 1) {
+  [0, Math.PI / 2].forEach((ry) => {
+    const mesh = new THREE.Mesh(flameGeo, createFireMaterial());
+    mesh.rotation.y = ry;
+    mesh.position.copy(pos);
+    mesh.scale.setScalar(scale);
+    scene.add(mesh);
+  });
+}
+
 /* ---------------------------------------------------------------------
    STREET SURFACE (ground/road/sidewalks/curbs/lane markings)
 
@@ -207,7 +422,10 @@ export function spawnFireEffect(pos, scale = 1) {
 --------------------------------------------------------------------- */
 export function loadStreetSurface() {
   const groundGeo = new THREE.PlaneGeometry(STREET_HALF_W * 2 + 70, STREET_LENGTH + 90);
-  const dirtMat = new THREE.MeshStandardMaterial({ color: 0x3a3530, roughness: 1, metalness: 0 });
+  const dirtMat = new THREE.MeshStandardMaterial({
+    map: dirtTex, normalMap: dirtNormalTex, normalScale: new THREE.Vector2(0.9, 0.9),
+    roughness: 1, metalness: 0,
+  });
   const groundMesh = new THREE.Mesh(groundGeo, dirtMat);
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.position.set(0, -0.02, -STREET_LENGTH / 2 + 20);
@@ -215,7 +433,10 @@ export function loadStreetSurface() {
   scene.add(groundMesh);
   const road = new THREE.Mesh(
     new THREE.PlaneGeometry(STREET_HALF_W * 2, STREET_LENGTH + 70),
-    new THREE.MeshStandardMaterial({ map: asphaltTex, roughness: 0.95, metalness: 0 })
+    new THREE.MeshStandardMaterial({
+      map: asphaltTex, normalMap: asphaltNormalTex, normalScale: new THREE.Vector2(0.6, 0.6),
+      roughness: 0.95, metalness: 0,
+    })
   );
   road.rotation.x = -Math.PI / 2;
   road.position.set(0, 0.005, -STREET_LENGTH / 2 + 20);
@@ -278,7 +499,7 @@ export function makeBuilding(x, z, w, h, d) {
   g.add(door);
   const roof = new THREE.Mesh(
     new THREE.BoxGeometry(w * 0.92, 0.4, d * 0.92),
-    new THREE.MeshStandardMaterial({ color: 0x2a2824, roughness: 1 })
+    new THREE.MeshStandardMaterial({ map: roofTex, roughness: 1 })
   );
   roof.position.y = h + 0.15;
   g.add(roof);
@@ -309,7 +530,7 @@ export function makeBuilding(x, z, w, h, d) {
     g.add(tier);
     const tierRoof = new THREE.Mesh(
       new THREE.BoxGeometry(tierW * 0.94, 0.3, tierD * 0.94),
-      new THREE.MeshStandardMaterial({ color: 0x2a2824, roughness: 1 })
+      new THREE.MeshStandardMaterial({ map: roofTex, roughness: 1 })
     );
     tierRoof.position.set(tier.position.x, h + tierH + 0.15, tier.position.z);
     g.add(tierRoof);
@@ -351,7 +572,7 @@ export function makeWreck(x, z, ry, burning) {
   const g = new THREE.Group();
   const col = burning ? 0x2a2320 : [0x4a3a32, 0x3d4550, 0x5c4030, 0x2f3340, 0x8a1f1f, 0x1f3a52][Math.floor(rnd() * 6)];
   const bodyMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.75, metalness: 0.35 });
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.6, metalness: 0.2 });
+  const darkMat = new THREE.MeshStandardMaterial({ map: rustTex, color: 0x2a2c30, roughness: 0.6, metalness: 0.2 });
   const glassMat = new THREE.MeshStandardMaterial({
     color: 0x0e1216, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.55,
   });
@@ -406,6 +627,7 @@ export function makeWreck(x, z, ry, burning) {
     light.position.set(x, 1.15, z);
     scene.add(light);
     spawnFireEffect(new THREE.Vector3(x, 0.9, z));
+    spawnFlameBillboards(new THREE.Vector3(x, 0.45, z), 1.3);
   }
   return g;
 }
@@ -552,7 +774,7 @@ export function loadObstacles() {
 export function makeDumpster(x, z) {
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(1.35, 1.15, 0.85),
-    new THREE.MeshStandardMaterial({ color: 0x2d4a32, roughness: 0.7, metalness: 0.25 })
+    new THREE.MeshStandardMaterial({ map: rustTex, color: 0x3d5a42, roughness: 0.7, metalness: 0.25 })
   );
   mesh.position.set(x, 0.58, z);
   mesh.castShadow = true; mesh.receiveShadow = true;
@@ -575,7 +797,7 @@ function buildWestPocket() {
   const px = -(rowX + 15), pz = WEST_POCKET_Z;
   const lot = new THREE.Mesh(
     new THREE.PlaneGeometry(20, 18),
-    new THREE.MeshStandardMaterial({ map: concreteTex, roughness: 1 })
+    new THREE.MeshStandardMaterial({ map: concreteTex, normalMap: concreteNormalTex, roughness: 1 })
   );
   lot.rotation.x = -Math.PI / 2;
   lot.position.set(px, 0.015, pz);
@@ -595,9 +817,12 @@ function buildDepotYard() {
   const crossRoadTex = asphaltTex.clone();
   crossRoadTex.needsUpdate = true;
   crossRoadTex.repeat.set(Math.max(2, Math.round((cx - STREET_HALF_W + 4) / 6)), 3);
+  const crossRoadNormalTex = asphaltNormalTex.clone();
+  crossRoadNormalTex.needsUpdate = true;
+  crossRoadNormalTex.repeat.copy(crossRoadTex.repeat);
   const crossRoad = new THREE.Mesh(
     new THREE.PlaneGeometry(cx - STREET_HALF_W + 4, 8),
-    new THREE.MeshStandardMaterial({ map: crossRoadTex, roughness: 1 })
+    new THREE.MeshStandardMaterial({ map: crossRoadTex, normalMap: crossRoadNormalTex, roughness: 1 })
   );
   crossRoad.rotation.x = -Math.PI / 2;
   crossRoad.position.set((STREET_HALF_W + cx) / 2 - 2, 0.015, cz);
@@ -617,7 +842,7 @@ function buildDepotYard() {
   makeStreetlight(cx - 10, cz - 5.5);
   const yard = new THREE.Mesh(
     new THREE.PlaneGeometry(34, 30),
-    new THREE.MeshStandardMaterial({ map: concreteTex, roughness: 1 })
+    new THREE.MeshStandardMaterial({ map: concreteTex, normalMap: concreteNormalTex, roughness: 1 })
   );
   yard.rotation.x = -Math.PI / 2;
   yard.position.set(cx, 0.02, cz);
@@ -1376,9 +1601,8 @@ export function checkVehicleRollover(dt) {
 /* ---------------------------------------------------------------------
    ZOMBIES
 --------------------------------------------------------------------- */
-const zombieMat1 = new THREE.MeshStandardMaterial({ color: 0x5c6b4c, roughness: 0.95 });
-const zombieMat2 = new THREE.MeshStandardMaterial({ color: 0x3f4a38, roughness: 0.95 });
-const woundMat = new THREE.MeshStandardMaterial({ color: 0x5c1414, roughness: 1 });
+const zombieMat1 = new THREE.MeshStandardMaterial({ map: zombieSkinTex, color: 0x5c6b4c, roughness: 0.95 });
+const zombieMat2 = new THREE.MeshStandardMaterial({ map: zombieSkinTex, color: 0x3f4a38, roughness: 0.95 });
 function buildZombieMesh() {
   const g = new THREE.Group();
   const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.6, 4, 8), zombieMat1);
@@ -1387,7 +1611,9 @@ function buildZombieMesh() {
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 10), zombieMat2);
   head.position.y = 1.5; head.castShadow = true;
   g.add(head);
-  const wound = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 6), woundMat);
+  // Infected wound glow — was a flat dark-red blob (createToxicMaterial,
+  // see shaders.js); one fresh material per zombie so each pulse desyncs.
+  const wound = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 6), createToxicMaterial(0x8a2f10));
   wound.position.set(0.15, 1.05, 0.18);
   g.add(wound);
   const hip = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.15, 4, 8), zombieMat1);

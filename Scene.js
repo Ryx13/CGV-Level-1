@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { state } from './state.js';
-import { createFogMaterial, fogUniforms, createRainMaterial, rainUniforms } from './shaders.js';
+import {
+  createFogMaterial, fogUniforms, createRainMaterial, rainUniforms,
+  createPuddleMaterial, puddleUniforms, fireUniforms, toxicUniforms,
+} from './shaders.js';
 
 /* ======================================================================
    Scene.js — RENDERER / SCENE / CAMERA / PHYSICS WORLD / HUD
@@ -369,9 +372,7 @@ onResize(); // now that `rain` exists, size it correctly for the current viewpor
 --------------------------------------------------------------------- */
 const puddleGroup = new THREE.Group();
 scene.add(puddleGroup);
-const puddleMaterial = new THREE.MeshStandardMaterial({
-  color: 0x141a20, roughness: 0.12, metalness: 0.25, transparent: true, opacity: 0.88,
-});
+const puddleMaterial = createPuddleMaterial();
 const PUDDLE_COUNT = 22;
 export function createPuddles(enabled) {
   puddleGroup.clear();
@@ -399,6 +400,9 @@ export function updateWeatherFX(dt) {
   fog.position.x = camera.position.x;
   fog.position.z = camera.position.z;
   if (rain.visible) rainUniforms.uTime.value += dt;
+  puddleUniforms.uTime.value += dt;
+  fireUniforms.uTime.value += dt;
+  toxicUniforms.uTime.value += dt;
 }
 
 /* ---------------------------------------------------------------------
